@@ -1,0 +1,14 @@
+# Normalize line endings in the repository; Windows build scripts keep CRLF
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.md text
+*.cpp text
+*.h text
+LICENSE text
+
+# Binaries (should not be committed anyway)
+*.asi binary
+*.dll binary
+*.exe binary
+*.zip binary

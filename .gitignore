@@ -1,0 +1,40 @@
+# Build outputs (binaries are distributed via GitHub Releases / Nexus, not versioned)
+build/
+*.asi
+*.dll
+*.exe
+*.map
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.zip
+*.7z
+
+# Logs, dumps and investigation artifacts (never publish)
+*.log
+*.dmp
+*.settings
+*.bak
+*.backup*
+dryrun.log
+sl-*.log
+ReShade.log
+Witcher3RemasteredDLSSGFix.log
+
+# Game / NVIDIA / third-party files must never be committed
+nvngx_*.dll
+sl.*.dll
+dinput8.dll
+dxgi.dll
+*.addon64
+*.ini
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
