@@ -6,6 +6,12 @@ A small, runtime-only ASI plugin that fixes a resolution-range calculation insid
 prevent NVIDIA DLSS Frame Generation (including Multi Frame Generation) from ever being enabled at
 some resolutions, for example 2560x1080.
 
+## Downloads
+
+- **Nexus Mods:** https://www.nexusmods.com/witcher3/mods/13434
+- **GitHub Releases:** https://github.com/ArmandoGaleano/Witcher3RemasteredDLSSGFix/releases
+- **Source code:** https://github.com/ArmandoGaleano/Witcher3RemasteredDLSSGFix
+
 > **THIS MOD DOES NOT FORCE FRAME GENERATION ON.**
 > It fixes the upstream resolution calculation and leaves the game's original DLSS-G safety/validation
 > logic completely intact. The game itself decides to enable Frame Generation, exactly as it does at 1920x1080.
