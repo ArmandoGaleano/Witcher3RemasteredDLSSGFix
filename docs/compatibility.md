@@ -1,62 +1,78 @@
 # Compatibility
 
-## Supported game build (v0.1.0-beta)
+## Supported game build (v0.2.0-beta)
 
 | Item | Value |
 |---|---|
 | Game | The Witcher 3: Wild Hunt — Remastered |
-| Version | 5.00c (in-game "v 5.00c") |
+| Version | 5.00c |
 | Steam build | 25646871 |
 | Executable | `bin\x64_dx12\witcher3.exe`, FileVersion 5.0.0.1044392 / 5.0.15.61352 |
 | Executable SHA256 | `9406ECCC12B68E08920931442EF6A57340E910D3E01F2082E88232487433FE51` |
-| Renderer | DX12 only (the DX11 executable is not supported and not patched) |
+| Renderer | DX12 only |
 
-Other builds: the plugin validates signatures and cvar metadata and applies **nothing** when they do not
-match (`unsupported game build` in the log). Future game updates may need updated signatures.
+Other builds receive no patch if the signatures/semantic checks do not match.
 
-## Resolutions
+## Resolution test matrix
 
-| Resolution | Vanilla internal extent | Expected with fix | Status |
-|---|---|---|---|
-| 2560x1080 | 2544x1060 (FG off) | 2560x1080 | **Confirmed** (FG on, 3 generated frames) |
-| 1920x1080 | 1920x1080 (FG on) | 1920x1080 | Unaffected |
-| 1680x1050 | 1680x1008 | 1680x1048 (non-legacy rounds to multiples of 4) | Not tested with fix; FG may stay off |
-| 1600x1024 | 1600x1000 | 1600x1024 | Not tested with fix |
-| 1600x900 | 1584x880 | 1600x900 | Not tested with fix |
-| 2560x1440, 3440x1440, 3840x1600, 3840x2160 | predicted exact even in vanilla | unchanged | Not tested |
-| 1280x720, 1366x768 | predicted 1260x720 / 1344x768 | 1280x720 / 1364x768 | Not tested |
+| Resolution | Test type | Result with v0.2.0-beta candidate |
+|---|---|---|
+| 3413x1440 | cold start + instrumented Streamline/NGX run | **Confirmed: FG on** |
+| 3620x1527 | cold start | **Confirmed: FG on** |
+| 2560x1080 | cold start | **Confirmed: FG on** |
+| 3840x1620 | in-session resolution switch | **Confirmed: FG remained on** |
+| 1920x1080 | in-session resolution switch | **Confirmed: FG remained on** |
 
-Community reports for other resolutions are welcome (include the plugin log and, if possible, the
-Streamline log).
+The same session also switched through all five resolutions above without visible rendering corruption
+or a crash.
+
+### Instrumented 3413x1440 result
+
+| Item | v0.1.0-beta | v0.2.0-beta candidate |
+|---|---:|---:|
+| Requested / swapchain | 3413x1440 | 3413x1440 |
+| DRS maximum | 3412x1440 | **3413x1440** |
+| Viewport | 3412x1440 | **3413x1440** |
+| Letterbox offsets | 1,0 | **0,0** |
+| Full-resolution RTs | 3412x1440 | **3413x1440** |
+| DLSS-RR output | 3412x1440 | **3413x1440** |
+| Failed RR evaluations | 0 | **0** |
+| NGX `InvalidParameter` | 0 | **0** |
+| DLSS-G feature | not created | **created** |
+| Interpolation state | never enabled | **eOn / 3 generated frames** |
+| Hudless / Alpha UI | mismatch path | **present (`HasHudless=1`, `HasAlphaUI=1`)** |
+
+One isolated `DXGI_ERROR_INVALID_CALL` occurred during an exclusive-fullscreen focus-loss transition.
+DLSS-G had just disabled because the window was not focused, then re-enabled normally when focus returned.
+The error did not repeat and is being tracked as a non-blocking observation.
+
+## DSR / DLDSR
+
+v0.2.0-beta specifically addresses the remaining case where the requested resolution is not divisible by
+4 and the game's non-legacy path would otherwise round the maximum DRS extent down.
+
+3413x1440 and 3620x1527 were verified locally. Other DSR/DLDSR combinations are welcome for community
+testing.
 
 ## Display modes
 
-Tested in exclusive fullscreen (`FullScreenMode=2`). Borderless and windowed modes were not tested with
-the fix.
+The instrumented validation runs used exclusive fullscreen (`FullScreenMode=2`). Borderless/windowed
+behavior of the new exact-maximum path has not been validated to the same level.
 
 ## Tested alongside (not required, not guaranteed)
 
-The test environment had the following installed at the same time; the fix does not depend on them and
-does not interact with them:
-
-- RenoDX / "DLSS 5" ReShade add-on (hooks NGX create/evaluate in a different module);
-- ReShade 6.8 (`dxgi.dll` in `bin\x64_dx12`);
-- W3SpawnMenu (`W3SpawnMenu.asi`, loaded by the same ASI loader);
-- Ultimate ASI Loader (`dinput8.dll`);
-- NVIDIA App DLSS Override with Streamline OTA plugins (`sl.*` 2.14.0 loaded from `ProgramData` instead
-  of the game's 2.14.1) and `nvngx_dlssg.dll` 310.9.1.
-
-Anything that modifies the same two code sites of `witcher3.exe` would conflict; no known mod does.
+- RenoDX / DLSS 5 ReShade add-on;
+- ReShade 6.8;
+- W3SpawnMenu;
+- Ultimate ASI Loader;
+- NVIDIA App DLSS Override / Streamline OTA plugins.
 
 ## Settings interaction
 
-- `[Rendering/DRS] Enable=false` is the state the in-game UI enforces when DLSS is active and the state
-  used in testing. A manually forced `Enable=true` runs the legacy DRS controller on top of the non-legacy
-  range and is not supported in this release.
-- `DLSSGUseHudless`, `DLSSGMode`, `DLSSGNumFramesToGenerate`, Reflex and all other settings are not
-  touched by the plugin.
+The plugin does not alter `DLSSGUseHudless`, `DLSSGMode`, `DLSSGNumFramesToGenerate`, Reflex or user
+graphics settings. It does not force Frame Generation on.
 
 ## Hardware
 
-Tested on an NVIDIA RTX 50-series GPU with DLSS Multi Frame Generation (3 generated frames). RTX 40-series
-single-frame generation should behave identically from the game's point of view but was not tested.
+Validated on an NVIDIA RTX 50-series GPU with DLSS Multi Frame Generation (3 generated frames).
+RTX 40-series behavior is expected to follow the same game path but was not directly tested.

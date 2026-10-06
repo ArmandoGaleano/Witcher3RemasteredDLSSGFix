@@ -1,10 +1,10 @@
 # Witcher 3 Remastered - DLSS Frame Generation Resolution Fix
 
-**Version:** v0.1.0-beta · **Game:** The Witcher 3: Wild Hunt — Remastered (5.00c, DX12) · **License:** MIT
+**Version:** v0.2.0-beta · **Game:** The Witcher 3: Wild Hunt — Remastered (5.00c, DX12) · **License:** MIT
 
-A small, runtime-only ASI plugin that fixes a resolution-range calculation inside the game which can
-prevent NVIDIA DLSS Frame Generation (including Multi Frame Generation) from ever being enabled at
-some resolutions, for example 2560x1080.
+A small, runtime-only ASI plugin that fixes internal resolution mismatches that can prevent NVIDIA
+DLSS Frame Generation — including Multi Frame Generation — from enabling at some native, ultrawide,
+DSR and DLDSR resolutions.
 
 ## Downloads
 
@@ -13,140 +13,155 @@ some resolutions, for example 2560x1080.
 - **Source code:** https://github.com/ArmandoGaleano/Witcher3RemasteredDLSSGFix
 
 > **THIS MOD DOES NOT FORCE FRAME GENERATION ON.**
-> It fixes the upstream resolution calculation and leaves the game's original DLSS-G safety/validation
-> logic completely intact. The game itself decides to enable Frame Generation, exactly as it does at 1920x1080.
+> It fixes the upstream resolution state and leaves the game's own DLSS-G enable/disable logic intact.
+> The game itself still decides whether Frame Generation is allowed.
 
-## What it fixes
+## What v0.2.0-beta fixes
 
-The Witcher 3 Remastered contains a *legacy* dynamic-resolution (DRS) range calculation that is active by
-default (`Rendering/DRS/Legacy UseLegacy = 1`, a cvar the settings loader does not accept from
-`dx12user.settings`). That legacy solver rounds the maximum internal rendering extent to a multiple of a
-"step" it chooses, which can make the internal extent differ from the actual swapchain resolution.
+The game has two related resolution-alignment problems in the path used to prepare DRS/render targets
+for DLSS and DLSS-G.
 
-Confirmed during the investigation:
+The original v0.1.0-beta fixed the first problem: the legacy DRS range solver could choose an internal
+maximum smaller than the requested output resolution. At 2560x1080, for example, the game could use
+2544x1060 internally, which caused the game's Hudless/UI validation to reject DLSS-G.
 
-```
-2560x1080 swapchain
-  → legacy DRS maximum        2544x1060
-  → Hudless / UI resources    2544x1060
-  → DLSS-G validation rejects the mismatch (hudless must equal the viewport)
-  → Frame Generation stays disabled (the game never sends mode = On)
-```
+v0.2.0-beta keeps that fix and also fixes the remaining multiple-of-4 alignment case. The game's
+non-legacy path normally rounds the maximum DRS extent down to a multiple of 4. That means a requested
+resolution such as 3413x1440 becomes 3412x1440. The resulting 1-pixel letterbox/viewport offset is enough
+for the game's DLSS-G validation to stay off.
 
-With the fix, the two range calculations take the game's existing **non-legacy** path:
+The new version keeps the requested maximum extent exact and makes the full-resolution render target use
+the same exact size, while leaving lower DRS slots at the game's original aligned sizes.
 
-```
-2560x1080 swapchain
-  → internal extent           2560x1080
-  → Hudless / UI resources    2560x1080
-  → the original Hudless validation succeeds
-  → the game itself enables DLSS Frame Generation normally (3 generated frames confirmed)
+Verified example:
+
+```text
+3413x1440 requested
+  -> v0.1.0-beta: DRS max 3412x1440, viewport 3412x1440, offset 1,0 -> FG off
+  -> v0.2.0-beta: DRS max 3413x1440, viewport 3413x1440, offset 0,0 -> FG on
 ```
 
-Other resolutions are affected by the same solver (observed in testing: 1680x1050 → 1680x1008,
-1600x1024 → 1600x1000, 1600x900 → 1584x880). 1920x1080 happens to come out exact, which is why Frame
-Generation worked there and nowhere else.
+Ray Reconstruction was also verified at `2275x960 -> 3413x1440` with no NGX `InvalidParameter` failures.
+
+## Why this matters for DSR / DLDSR
+
+DSR/DLDSR can expose desktop resolutions whose width or height is not divisible by 4. Those modes could
+still fail with v0.1.0-beta even though the original legacy-DRS issue was fixed.
+
+Locally verified with v0.2.0-beta:
+
+- **3413x1440** — cold start, Frame Generation enabled, full Streamline/NGX evidence collected.
+- **3620x1527** — cold start, Frame Generation enabled.
+- **2560x1080** — cold start, Frame Generation enabled.
+- **3840x1620** — resolution switch, Frame Generation remained enabled.
+- **1920x1080** — resolution switch, Frame Generation remained enabled.
+
+A single `DXGI_ERROR_INVALID_CALL` was observed during one exclusive-fullscreen focus-loss transition at
+3413x1440; DLSS-G re-enabled normally after focus returned and the error did not repeat. It was not observed
+as a continuous failure.
 
 ## What it does NOT do
 
 - does not replace DLSS DLLs (`nvngx_dlss*.dll`);
 - does not replace or modify Streamline (`sl.*.dll`);
-- does not modify nvngx libraries;
+- does not modify NVIDIA NGX libraries;
 - does not patch `witcher3.exe` on disk;
 - does not modify saves or settings files;
-- does not change `DLSSGUseHudless` or any other cvar;
-- does not call `slDLSSGSetOptions(eOn)` or force Frame Generation;
+- does not change `DLSSGUseHudless` or other DLSS-G cvars;
+- does not force `slDLSSGSetOptions(eOn)`;
 - does not disable the game's DLSS-G validation;
-- no network access, no telemetry, no auto-updater.
+- no network access, telemetry or auto-updater.
 
 ## How it works
 
-At runtime, on a worker thread (outside the DLL loader lock), the plugin performs strict signature and
-semantic validation against the two legacy-DRS branch sites inside `witcher3.exe`. Only if **all**
-validations pass does it temporarily change
+At startup the plugin validates the supported `witcher3.exe` build before making any runtime change.
 
-```
-JE  +0x21   (74 21)
-→ JMP +0x21   (EB 21)
-```
+It first selects the game's existing non-legacy DRS range path. v0.2.0-beta then applies a narrow correction
+to preserve the requested width/height as the maximum DRS extent and to keep the full-resolution render
+target consistent with that exact extent.
 
-at both sites, in process memory only. This is logically equivalent to selecting the game's existing
-non-legacy DRS range path (the same code the game runs when `UseLegacy` is false). The executable on
-disk remains untouched; the change exists only while the game is running.
+Lower DRS slots keep their original aligned dimensions. Special slots used by NGX/FSR/XeSS are not changed
+by the maximum-slot correction.
 
-## Safety (fail-safe design)
+All changes exist only in the running process. The executable on disk is never modified.
 
-- each of the two signatures must occur **exactly once** in the game's code section;
-- both branch sites must reference the **same** `UseLegacy` global;
-- the cvar metadata of that global must match: group `Rendering/DRS/Legacy`, name `UseLegacy`,
-  flags `0x200`, default `1`;
-- the expected original opcodes (`74 21`) must be present at both sites;
-- the patch is all-or-nothing: if the second write fails the first is reverted;
-- if any validation fails, **no patch is applied**, the game runs unmodified and the log reports
-  `unsupported game build`.
+For the reverse-engineering details and validation criteria, see `docs/technical-details.md`.
+
+## Safety / fail-safe behavior
+
+The plugin validates, before patching:
+
+- the supported x64 PE layout;
+- both legacy-DRS signatures and their shared `UseLegacy` cvar;
+- the cvar metadata and expected defaults;
+- the complete expected non-legacy blocks before changing them;
+- the render-target descriptor-tail signature and original bytes;
+- the runtime hook encoding before it is installed.
+
+The update is treated as one patch set. If validation fails, the plugin reports an unsupported build and
+does not apply the fix.
+
+The included dry-run audit tool performs the validation without modifying or running game code.
 
 ## Compatibility
 
 Confirmed / tested:
 
-- The Witcher 3 Remastered **5.00c**, Steam build **25646871**, DX12
-- 2560x1080, fullscreen, DLSS (DLAA) + Ray Reconstruction, DLSS Multi Frame Generation (3 generated frames)
+- The Witcher 3 Remastered **5.00c**
+- Steam build **25646871**
+- DX12
+- exclusive fullscreen (`FullScreenMode=2`) for the instrumented validation runs
 - NVIDIA RTX 50-series test environment
+- DLSS Ray Reconstruction + DLSS Multi Frame Generation (3 generated frames)
 
 Tested alongside (not required, not guaranteed compatible): RenoDX / DLSS 5 setup, ReShade,
-W3SpawnMenu, NVIDIA App DLSS Override / Streamline OTA plugins.
+W3SpawnMenu, Ultimate ASI Loader, NVIDIA App DLSS Override / Streamline OTA plugins.
 
-See `docs/compatibility.md` for details and the current list of resolutions with known results.
+See `docs/compatibility.md` for the test matrix.
 
 ## Requirements
 
-- The Witcher 3 Remastered, DX12 executable (`bin\x64_dx12\witcher3.exe`).
-- A compatible **ASI Loader** installed separately (for example a `dinput8.dll`-based Ultimate ASI Loader
-  placed in `bin\x64_dx12`). The loader is a third-party component and is **not** included in this package.
-- NVIDIA GPU with DLSS Frame Generation support (RTX 40/50 series).
+- The Witcher 3 Remastered DX12 executable (`bin\x64_dx12\witcher3.exe`).
+- A compatible ASI Loader installed separately.
+- NVIDIA GPU with DLSS Frame Generation support.
 
 ## Installation
 
-1. Install a compatible ASI Loader for The Witcher 3 Remastered (DX12) if you do not have one already.
-2. Copy `Witcher3RemasteredDLSSGFix.asi` to `The Witcher 3\bin\x64_dx12\` (next to `witcher3.exe`).
-3. Launch the game using DX12 and enable DLSS Frame Generation in the graphics options as usual.
-4. If something does not work, check `Witcher3RemasteredDLSSGFix.log` in the same folder.
+1. Install a compatible ASI Loader for The Witcher 3 Remastered DX12 if you do not have one already.
+2. Copy `Witcher3RemasteredDLSSGFix.asi` to `The Witcher 3\bin\x64_dx12\`.
+3. Launch the game in DX12 and enable DLSS Frame Generation normally.
+4. If something does not work, inspect `Witcher3RemasteredDLSSGFix.log` next to the plugin.
 
 ## Uninstall
 
-Delete `Witcher3RemasteredDLSSGFix.asi` (and, optionally, `Witcher3RemasteredDLSSGFix.log`).
-No save or settings file needs to be changed.
+Delete `Witcher3RemasteredDLSSGFix.asi` and, optionally, its log file. No save or settings cleanup is needed.
 
 ## Known limitations
 
-- tested on the supported build listed above; other builds receive **no patch** by design;
-- game updates may change the code and require a new signature (the log will say `unsupported game build`);
-- the initial public version is a **beta**: other resolutions, GPUs and monitors need community testing;
-- resolutions whose width or height is not a multiple of 4 are rounded down to a multiple of 4 by the
-  game's non-legacy path (for example 1680x1050 → 1680x1048), so Frame Generation may still stay off there;
-- the DRS controller behaviour with a manually forced `[Rendering/DRS] Enable=true` is not a supported
-  configuration for the initial release (the in-game UI disables DRS when DLSS is active).
+- Only the supported game build above is validated.
+- Game updates may require new signatures.
+- Other GPUs, monitors, display modes and resolutions still need community testing.
+- Instrumented validation of the new non-multiple-of-4 path was performed in exclusive fullscreen.
+- This remains a beta release.
 
 ## Troubleshooting
 
-Open `Witcher3RemasteredDLSSGFix.log` next to the plugin:
+Check `Witcher3RemasteredDLSSGFix.log`.
 
-- `patch applied: A 74 21 -> EB 21 ; B 74 21 -> EB 21` — the fix is active;
-- `unsupported game build` — your executable does not match the tested build; nothing was changed;
-- no log file at all — the ASI Loader did not load the plugin (check the loader installation and that the
-  file is in `bin\x64_dx12`).
+A successful v0.2.0-beta startup should report that all validations passed and the complete patch set was
+applied. If the executable does not match the supported build, the plugin should leave the game unmodified
+and report an unsupported build.
 
-Never replace NVIDIA DLLs as part of installing this fix; it does not need it.
+Never replace NVIDIA DLLs just to install this fix; it does not require that.
 
 ## Building from source
 
-See `scripts/build.cmd` (portable w64devkit / GCC, no external libraries). `tools/dryrun.cpp` builds a
-console tool that runs the exact same validation against a `witcher3.exe` without executing the game or
-writing anything, useful for auditing a new build before deploying.
+See `scripts/build.cmd` for the portable w64devkit/GCC build. The dry-run utility validates the supported
+executable without starting the game or writing to it.
 
 ## Credits and legal
 
 Author: Armando Galeano.
 
-The Witcher 3 is property of CD PROJEKT RED. DLSS, Streamline and NGX are property of NVIDIA. This project
-contains no files from the game, NVIDIA or any third-party mod. Source code is MIT licensed (see `LICENSE`).
+The Witcher 3 is property of CD PROJEKT RED. DLSS, Streamline and NGX are property of NVIDIA.
+This project contains no files from the game, NVIDIA or any third-party mod. Source code is MIT licensed.

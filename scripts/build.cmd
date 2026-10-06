@@ -9,7 +9,7 @@ set "ROOT=%~dp0.."
 set "OUT=%ROOT%\build"
 set "WFLAGS=-std=c++17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -fno-exceptions -fno-rtti -m64"
 rem -ffile-prefix-map keeps absolute build paths out of the binary; -s strips the symbol table and debug sections.
-set "HFLAGS=-ffile-prefix-map=%ROOT%=. -fdebug-prefix-map=%ROOT%=."
+set HFLAGS="-ffile-prefix-map=%ROOT%=." "-fdebug-prefix-map=%ROOT%=."
 set "LFLAGS=-static -static-libgcc -static-libstdc++ -Wl,--no-insert-timestamp"
 if not exist "%OUT%" mkdir "%OUT%"
 
